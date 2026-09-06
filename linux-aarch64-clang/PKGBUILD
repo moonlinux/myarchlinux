@@ -1,0 +1,276 @@
+# AArch64 multi-platform
+# Maintainer: Dan Johansen <strit@manjaro.org>
+# Contributor: Kevin Mihelich <kevin@archlinuxarm.org>
+# Contributor: Dragan Simic <dsimic@buserror.io>
+# Contributor: Anand Moon <linux.amoon@gmail.com>
+
+# https://cdn.kernel.org/pub/linux/kernel/v6.x/${_srcname}.tar.xz                  # Kernel source
+
+pkgbase=linux-aarch64-clang
+pkgver=7.2.2
+pkgrel=2
+_newversion=false
+_stopbuild=false    # Will also stop if ${_newversion} is true
+_srcname="linux-${pkgver/%.0/}"
+_kernelname="${pkgbase#linux}"
+_desc="AArch64 multi-platform"
+arch=('aarch64')
+url="http://www.kernel.org/"
+license=('GPL2')
+makedepends=('xmlto' 'docbook-xsl' 'kmod' 'inetutils' 'bc' 'git' 'dtc' 'uboot-tools' 'pahole')
+options=('!strip')
+
+source=("https://cdn.kernel.org/pub/linux/kernel/v7.x/${_srcname}.tar.xz" # Kernel source
+	'config'
+	'linux.preset')
+
+sha256sums=('7d0e7ce14f98c43efe880cffbf354a59be45928fdf7170d7333c374ae91c0d83'
+	'a5f6c9a2b037756274cc8be95699d550ed60d41061be299bdcf1e41b24c8d3b1'
+	'66644820faa950a5fc59181f5aefcbed6d7ed652b29aee69979a2be2a032025d')
+
+export KBUILD_BUILD_HOST=archlinux-arm64
+export KBUILD_BUILD_USER=$pkgbase
+export KBUILD_BUILD_TIMESTAMP="$(date -Ru${SOURCE_DATE_EPOCH:+d @$SOURCE_DATE_EPOCH})"
+
+prepare() {
+  apply_patches() {
+      local PATCH
+      for PATCH in "${source[@]}"; do
+          PATCH="${PATCH%%::*}"
+          PATCH="${PATCH##*/}"
+          [[ ${PATCH} = $1*.patch ]] || continue
+          msg2 "Applying patch: ${PATCH}..."
+          patch -N -p1 < "../${PATCH}"
+      done
+  }
+
+  cd ${_srcname}
+
+  # Assorted ARM patches
+  apply_patches 0
+
+  apply_patches 1
+
+  # Assorted Pinebook, PinePhone and PineTab patches
+  apply_patches 2
+
+  # Assorted rk356x patches
+  apply_patches 3
+
+  # Pinebook Pro patches by Megi
+  apply_patches 4
+
+  # Apply our kernel configuration
+  cat "${srcdir}/config" > .config
+
+  echo "Using kernelrelease from build system..."
+  # Do not override EXTRAVERSION; rely on make kernelrelease
+
+  # Enable some config options
+  # ./scripts/config -e PROVE_LOCKING -e DEBUG_RT_MUTEXES  -e DEBUG_MUTEXES -e DEBUG_ATOMIC_SLEEP
+
+  # Enable Kasan config options
+  # ./scripts/config -e KASAN -e KASAN_GENERIC  -e KASAN_INLINE -e KASAN_STACK -e KASAN_VMALLOC -e KASAN_EXTRA_INFO
+  # ./scripts/config -m KASAN_MODULE_TEST
+
+  # make oldconfig
+  # make hardening.config
+
+  # Don't run depmod on "make install", we'll do that ourselves in packaging
+  sed -i '2iexit 0' scripts/depmod.sh
+}
+
+build() {
+  cd ${_srcname}
+
+  # Get the kernel version
+  if [[ "${_newversion}" = false ]]; then
+    make prepare
+  fi
+
+  # Configure the kernel; adjust the line below to your choice
+  # or simply manually edit the ".config" file
+  if [[ "${_newversion}" = true ]]; then
+    make menuconfig   # CLI menu for configuration
+  fi
+  #make nconfig       # New CLI menu for configuration
+  #make xconfig       # X-based configuration
+  #make oldconfig     # Using old config from previous kernel version
+
+  # Stash the configuration (use with new major kernel version)
+  if [[ "${_newversion}" = true ]]; then
+    cp ./.config /var/tmp/${pkgbase}.config
+    cp ./.config "${srcdir}/config"
+  fi
+
+  # Stop here, which is useful to configure the kernel
+  if [[ "${_newversion}" = true || "${_stopbuild}" = true ]]; then
+    msg "Stopping build"
+    return 1
+  fi
+
+  # Enable to create an all-inclusive build
+  #yes "" | make config
+
+  # Build the kernel and the modules
+  unset LDFLAGS
+  rm -f Module.symvers
+  make ${MAKEFLAGS} Image Image.gz modules
+
+  # Generate device tree blobs with symbols to support
+  # applying device tree overlays in U-Boot
+  make ${MAKEFLAGS} DTC_FLAGS="-@" dtbs
+
+  if grep -q '^CONFIG_DEBUG_INFO_BTF=y' .config; then
+    # Generate vmlinux.h
+    bpftool btf dump file vmlinux format c > vmlinux.h
+  fi
+}
+
+_package() {
+  pkgdesc="The Linux Kernel and modules - ${_desc}"
+  depends=('coreutils' 'linux-firmware' 'kmod' 'mkinitcpio>=0.7' 'initramfs')
+  optdepends=('crda: to set the correct wireless channels of your country'
+	  'linux-firmware: additional firmware')
+  provides=('linux=${pkgver}')
+  replaces=('linux-aarch64' 'linux-aarch64-rc')
+  conflicts=('linux')
+  backup=("etc/mkinitcpio.d/${pkgbase}.preset")
+  install=${pkgname}.install
+
+  cd ${_srcname}
+
+  KARCH=arm64
+
+  # get kernel version
+  _kernver="$(make kernelrelease)"
+  _basekernel=${_kernver%%-*}
+  _basekernel=${_basekernel%.*}
+
+  mkdir -p "${pkgdir}"/{boot,usr/lib/modules}
+  make INSTALL_MOD_PATH="${pkgdir}/usr" modules_install
+  make INSTALL_DTBS_PATH="${pkgdir}/boot/dtbs" dtbs_install
+  cp arch/$KARCH/boot/Image "${pkgdir}/boot"
+  install -Dm644 arch/$KARCH/boot/Image{,.gz} -t "${pkgdir}/boot"
+
+  # make room for external modules
+  local _extramodules="extramodules-${_basekernel}${_kernelname}"
+  ln -s "../${_extramodules}" "${pkgdir}/usr/lib/modules/${_kernver}/extramodules"
+
+  # add real version for building modules and running depmod from hook
+  echo "${_kernver}" |
+    install -Dm644 /dev/stdin "${pkgdir}/usr/lib/modules/${_extramodules}/${_kernver}"
+
+  # remove build and source links
+  rm "${pkgdir}"/usr/lib/modules/${_kernver}/build
+
+  # now we call depmod...
+  depmod -b "${pkgdir}/usr" -F System.map "${_kernver}"
+
+  # sed expression for following substitutions
+  local _subst="
+    s|%PKGBASE%|${pkgbase}|g
+    s|%KERNVER%|${_kernver}|g
+    s|%EXTRAMODULES%|${_extramodules}|g
+  "
+
+  # install mkinitcpio preset file
+  sed "${_subst}" ../linux.preset |
+    install -Dm644 /dev/stdin "${pkgdir}/etc/mkinitcpio.d/${pkgbase}.preset"
+
+  # rather than use another hook (90-linux.hook) rely on mkinitcpio's 90-mkinitcpio-install.hook
+  # which avoids a double run of mkinitcpio that can occur
+  install -d "${pkgdir}/usr/lib/initcpio/"
+  echo "dummy file to trigger mkinitcpio to run" > "${pkgdir}/usr/lib/initcpio/${_kernver}"
+}
+
+_package-headers() {
+  pkgdesc="Header files and scripts for building modules for linux kernel - ${_desc}"
+  provides=("linux-headers=${pkgver}")
+  replaces=('linux-aarch64-headers' 'linux-aarch64-rc-headers')
+  conflicts=('linux-headers')
+
+  cd ${_srcname}
+  local _builddir="${pkgdir}/usr/lib/modules/${_kernver}/build"
+
+  install -Dt "${_builddir}" -m644 Makefile .config Module.symvers
+  install -Dt "${_builddir}/kernel" -m644 kernel/Makefile
+
+  mkdir "${_builddir}/.tmp_versions"
+
+  cp -t "${_builddir}" -a include scripts
+
+  install -Dt "${_builddir}/arch/${KARCH}" -m644 arch/${KARCH}/Makefile
+  install -Dt "${_builddir}/arch/${KARCH}/kernel" -m644 arch/${KARCH}/kernel/asm-offsets.s
+  install -Dt "${_builddir}" -m644 vmlinux Module.symvers System.map
+
+  cp -t "${_builddir}/arch/${KARCH}" -a arch/${KARCH}/include
+  mkdir -p "${_builddir}/arch/${KARCH}"
+  cp -t "${_builddir}/arch/${KARCH}" -a arch/${KARCH}/include
+
+  install -Dt "${_builddir}/drivers/md" -m644 drivers/md/*.h
+  install -Dt "${_builddir}/net/mac80211" -m644 net/mac80211/*.h
+
+  # http://bugs.archlinux.org/task/13146
+  install -Dt "${_builddir}/drivers/media/i2c" -m644 drivers/media/i2c/msp3400-driver.h
+
+  # http://bugs.archlinux.org/task/20402
+  install -Dt "${_builddir}/drivers/media/usb/dvb-usb" -m644 drivers/media/usb/dvb-usb/*.h
+  install -Dt "${_builddir}/drivers/media/dvb-frontends" -m644 drivers/media/dvb-frontends/*.h
+  install -Dt "${_builddir}/drivers/media/tuners" -m644 drivers/media/tuners/*.h
+
+  # add xfs and shmem for aufs building
+  mkdir -p "${_builddir}"/{fs/xfs,mm}
+
+  # copy in Kconfig files
+  find . -name Kconfig\* -exec install -Dm644 {} "${_builddir}/{}" \;
+
+  # remove unneeded architectures
+  local _arch
+  for _arch in "${_builddir}"/arch/*/; do
+    [[ ${_arch} == */${KARCH}/ || ${_arch} == */arm/ ]] && continue
+    rm -r "${_arch}"
+  done
+
+  # remove documentation files
+  rm -r "${_builddir}/Documentation"
+
+  # remove now broken symlinks
+  find -L "${_builddir}" -type l -printf 'Removing %P\n' -delete
+
+  # strip scripts directory
+  echo "Stripping build tools..."
+  local file
+  while read -rd '' file; do
+    case "$(file -bi "$file")" in
+      application/x-sharedlib\;*)      # Libraries (.so)
+	strip -v $STRIP_SHARED "$file" ;;
+      application/x-archive\;*)        # Libraries (.a)
+	strip -v $STRIP_STATIC "$file" ;;
+      application/x-executable\;*)     # Binaries
+	strip -v $STRIP_BINARIES "$file" ;;
+      application/x-pie-executable\;*) # Relocatable binaries
+	strip -v $STRIP_SHARED "$file" ;;
+    esac
+  done < <(find "${_builddir}" -type f -perm -u+x ! -name vmlinux -print0 2>/dev/null)
+
+  if command -v aarch64-linux-gnu-strip >/dev/null 2>&1; then
+    aarch64-linux-gnu-strip $STRIP_STATIC "${_builddir}/vmlinux"
+  else
+    strip $STRIP_STATIC "${_builddir}/vmlinux"
+  fi
+
+  # remove unwanted files
+  find ${_builddir} -name '*.orig' -delete
+
+  echo "Adding symlink..."
+  mkdir -p "$pkgdir/usr/src"
+  ln -sr "${_builddir}" "$pkgdir/usr/src/${pkgbase}"
+}
+
+pkgname=("${pkgbase}" "${pkgbase}-headers")
+for _p in ${pkgname[@]}; do
+  eval "package_${_p}() {
+    _package${_p#${pkgbase}}
+  }"
+done

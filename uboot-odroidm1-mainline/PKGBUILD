@@ -1,0 +1,84 @@
+# U-Boot: Rock Pi 4B based on PKGBUILD for Odroid M1
+# Maintainer: Dan Johansen <strit@manjaro.org>
+# Contributor: Kevin Mihelich 
+# Contributor: Adam <adam900710@gmail.com>
+# Contributor: Dragan Simic <dsimic@buserror.io>
+# Contributor: Anand Moon <linux.amoon@gmail.com>
+
+pkgname=uboot-odroidm1-mainline
+pkgver=2026.07
+pkgrel=1
+_tfaver=lts-v2.14.4
+pkgdesc="U-Boot for Odroid M1"
+arch=('aarch64')
+url='http://www.denx.de/wiki/U-Boot/WebHome'
+license=('GPL')
+makedepends=('git' 'arm-none-eabi-gcc' 'dtc' 'bc' 'swig' 'python-setuptools' 'python-pyelftools')
+provides=('uboot')
+conflicts=('uboot')
+replaces=('uboot-odroidm1-mainline')
+install=${pkgname}.install
+source=("ftp://ftp.denx.de/pub/u-boot/u-boot-${pkgver/rc/-rc}.tar.bz2"
+	"https://github.com/TrustedFirmware-A/trusted-firmware-a/archive/refs/tags/${_tfaver}.tar.gz"
+	"rk3568_ddr_lp4.bin::https://github.com/rockchip-linux/rkbin/raw/refs/heads/master/bin/rk35/rk3568_ddr_1560MHz_v1.25.bin")
+
+sha256sums=('78e8bfc382fe388f9b55aa1daf8c563522a037779b5d4c349d1415e381f1243e'
+	'b73683f713f3405e4978a427666b1e3cdf2391edaac9b308ca1f53b6809fb454'
+	'ab1d9b822a256b6ef4b3aa54b911c4d1e0faaebc882403c7a6b3efc3e69e07fc')
+
+prepare() {
+  cd u-boot-${pkgver/rc/-rc}
+  # Apply patches here
+}
+
+build() {
+  # Avoid build warnings by editing a .config option in place instead of
+  # appending an option to .config, if an option is already present
+  update_config() {
+    if ! grep -q "^$1=$2$" .config; then
+      if grep -q "^# $1 is not set$" .config; then
+        sed -i -e "s/^# $1 is not set$/$1=$2/g" .config
+      elif grep -q "^$1=" .config; then
+        sed -i -e "s/^$1=.*/$1=$2/g" .config
+      else
+        echo "$1=$2" >> .config
+      fi
+    fi
+  }
+
+  unset CFLAGS CXXFLAGS CPPFLAGS LDFLAGS
+
+  cd ${srcdir}/trusted-firmware-a-${_tfaver}
+
+  echo -e "\nBuilding TF-A for Odroid M1...\n"
+  make CC=gcc PLAT=rk3568 bl31
+  cp build/rk3568/release/bl31/bl31.elf ../u-boot-${pkgver/rc/-rc}
+
+  cd ../u-boot-${pkgver/rc/-rc}
+  export BL31=bl31.elf
+
+  export ROCKCHIP_TPL=${srcdir}/rk3568_ddr_lp4.bin
+
+  echo -e "\nBuilding U-Boot for Odroid M1...\n"
+  make odroid-m1-rk3568_defconfig
+
+  update_config 'CONFIG_IDENT_STRING' '" Manjaro Linux ARM"'
+#  update_config 'CONFIG_OF_LIBFDT_OVERLAY' 'y'
+#  update_config 'CONFIG_SPL_MMC_SDHCI_SDMA' 'n'
+#  update_config 'CONFIG_MMC_SDHCI_SDMA' 'y'
+#  update_config 'CONFIG_MMC_SPEED_MODE_SET' 'y'
+#  update_config 'CONFIG_MMC_IO_VOLTAGE' 'y'
+#  update_config 'CONFIG_MMC_UHS_SUPPORT' 'y'
+#  update_config 'CONFIG_MMC_HS400_ES_SUPPORT' 'y'
+#  update_config 'CONFIG_MMC_HS400_SUPPORT' 'y'
+
+  make -j$(nproc --all) EXTRAVERSION=-${pkgrel}
+}
+
+package() {
+  cd u-boot-${pkgver/rc/-rc}
+
+  mkdir -p "${pkgdir}/boot/extlinux"
+
+  install -D -m 0644 u-boot-rockchip.bin u-boot-rockchip-spi.bin -t "${pkgdir}/boot"
+}

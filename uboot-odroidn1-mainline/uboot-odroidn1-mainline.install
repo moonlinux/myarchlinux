@@ -1,0 +1,46 @@
+notice_uboot() {
+  echo "New version of U-Boot firmware can be flashed to your microSD card (mmcblk1)"
+  echo "or eMMC module (mmcblk2).  You can do that by running:"
+  echo "# dd if=/boot/u-boot-rockchip.bin of=/dev/mmcblkX seek=64 conv=notrunc,fsync"
+}
+
+create_config() {
+  mkdir -p /boot/extlinux
+echo "default ArchArm64
+
+menu title U-Boot menu
+prompt 0
+timeout 50
+
+LABEL ArchArm64
+        menu label Arch Linux Arm64
+        KERNEL  /Image
+        INITRD  /initramfs-linux.img
+        FDT     /dtbs/rockchip/rk3399-odroid-n1.dtb
+        APPEND  console=ttyS2,1500000 root=PARTUUID=d01c7ff5-2650-4f58-b6e6-67353b0b5c76 rw rootwait LANG=en_US.UTF-8 cma=512M audit=0 splash plymouth.ignore-serial-consoles" \
+    > /boot/extlinux/extlinux.conf
+}
+
+post_install() {
+  notice_uboot
+  if [ -f /boot/extlinux/extlinux.conf.pacsave ]; then
+    mv /boot/extlinux/extlinux.conf.pacsave /boot/extlinux/extlinux.conf
+  fi
+  if [ -f /boot/extlinux/extlinux.conf ]; then
+    echo "Keeping old extlinux.conf file..."
+  else
+    create_config
+  fi
+}
+
+post_upgrade() {
+  notice_uboot
+  if [ -f /boot/extlinux/extlinux.conf.pacsave ]; then
+    mv /boot/extlinux/extlinux.conf.pacsave /boot/extlinux/extlinux.conf
+  fi
+  if [ -f /boot/extlinux/extlinux.conf ]; then
+    echo "Keeping old extlinux.conf file..."
+  else
+    create_config
+  fi
+}

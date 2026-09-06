@@ -1,0 +1,56 @@
+notice_uboot() {
+  echo "A new version of the U-Boot firmware is available and can be flashed to your device:"
+  echo ""
+  echo "  • microSD card   (device: /dev/mmcblk1)"
+  echo "  • eMMC module    (device: /dev/mmcblk2)"
+  echo ""
+  echo "To flash the firmware to one of these devices, run:"
+  echo "  sudo dd if=/boot/u-boot-rockchip.bin of=/dev/mmcblkX seek=64 conv=notrunc,fsync"
+  echo ""
+  echo "Alternatively, to flash the firmware to SPI flash, use the following U-Boot commands:"
+  echo "  => sf probe"
+  echo "  => load mmc 0:1 0x10000000 u-boot-rockchip-spi.bin"
+  echo "  => sf update \$fileaddr 0 \$filesize"
+  echo "  => reset"
+}
+
+create_config() {
+  mkdir -p /boot/extlinux
+  echo "default ArchArm64
+
+menu title U-Boot menu
+prompt 0
+timeout 50
+
+LABEL ArchArm64
+        menu label Arch Linux Arm64
+        KERNEL  /Image
+        INITRD  /initramfs-linux.img
+        FDT     /dtbs/rockchip/rk3588-rock-5b.dtb
+	APPEND console=ttyS2,1500000 earlycon=ttyS2,1500000 root=LABEL=ROOT_MNJRO rw rootwait cma=512M audit=0 splash plymouth.ignore-serial-consoles loglevel=3 quiet LANG=en_US.UTF-8 kasan=1 kasan.multi_shot=1 fw_devlink=on " \
+    > /boot/extlinux/extlinux.conf
+}
+
+post_install() {
+  notice_uboot
+  if [ -f /boot/extlinux/extlinux.conf.pacsave ]; then
+    mv /boot/extlinux/extlinux.conf.pacsave /boot/extlinux/extlinux.conf
+  fi
+  if [ -f /boot/extlinux/extlinux.conf ]; then
+    echo "Keeping old extlinux.conf file..."
+  else
+    create_config
+  fi
+}
+
+post_upgrade() {
+  notice_uboot
+  if [ -f /boot/extlinux/extlinux.conf.pacsave ]; then
+    mv /boot/extlinux/extlinux.conf.pacsave /boot/extlinux/extlinux.conf
+  fi
+  if [ -f /boot/extlinux/extlinux.conf ]; then
+    echo "Keeping old extlinux.conf file..."
+  else
+    create_config
+  fi
+}

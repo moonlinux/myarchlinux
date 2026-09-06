@@ -1,0 +1,75 @@
+# U-Boot: Rock Pi 4B based on PKGBUILD for RockPro64
+# Maintainer: Dan Johansen <strit@manjaro.org>
+# Contributor: Kevin Mihelich 
+# Contributor: Adam <adam900710@gmail.com>
+# Contributor: Dragan Simic <dsimic@buserror.io>
+# Contributor: Anand Moon <linux.amoon@gmail.com>
+
+pkgname=uboot-odroidn1-mainline
+pkgver=2025.10
+pkgrel=1
+_tfaver=lts-v2.12.6
+pkgdesc="U-Boot for Odroid N1 RK3399"
+arch=('aarch64')
+url='http://www.denx.de/wiki/U-Boot/WebHome'
+license=('GPL')
+makedepends=('git' 'arm-none-eabi-gcc' 'dtc' 'bc' 'swig' 'python-setuptools' 'python-pyelftools')
+provides=('uboot')
+conflicts=('uboot')
+replaces=('uboot-odroidn1-mainline')
+install=${pkgname}.install
+source=("ftp://ftp.denx.de/pub/u-boot/u-boot-${pkgver/rc/-rc}.tar.bz2"
+	"https://github.com/TrustedFirmware-A/trusted-firmware-a/archive/refs/tags/${_tfaver}.tar.gz"
+	"1001-Odroid-n1-u-boot-upstream-dts.patch")
+
+sha256sums=('b4f032848e56cc8f213ad59f9132c084dbbb632bc29176d024e58220e0efdf4a'
+	'50059d35eccd0dcd1bb638f05efad739d9251afdbc734810da9dd13ea2e219c7'
+	'4be0ebbd48bfa7d88323c14d50d25b61ce6a51ad102c432d6220eb5c154ee857')
+
+prepare() {
+  cd u-boot-${pkgver/rc/-rc}
+  # Apply patches here
+  patch -N -p1 < ../1001-Odroid-n1-u-boot-upstream-dts.patch
+}
+
+build() {
+  # Avoid build warnings by editing a .config option in place instead of
+  # appending an option to .config, if an option is already present
+  update_config() {
+    if ! grep -q "^$1=$2$" .config; then
+      if grep -q "^# $1 is not set$" .config; then
+        sed -i -e "s/^# $1 is not set$/$1=$2/g" .config
+      elif grep -q "^$1=" .config; then
+        sed -i -e "s/^$1=.*/$1=$2/g" .config
+      else
+        echo "$1=$2" >> .config
+      fi
+    fi
+  }
+
+  unset CFLAGS CXXFLAGS CPPFLAGS LDFLAGS
+
+  cd ${srcdir}/trusted-firmware-a-${_tfaver}
+
+  echo -e "\nBuilding TF-A for Odroid N1...\n"
+  make CC=gcc PLAT=rk3399 bl31
+  cp build/rk3399/release/bl31/bl31.elf ../u-boot-${pkgver/rc/-rc}
+
+  cd ../u-boot-${pkgver/rc/-rc}
+  export BL31=bl31.elf
+
+  echo -e "\nBuilding U-Boot for Odroid N1...\n"
+  make odroid-n1_rk3399_defconfig
+
+  update_config 'CONFIG_IDENT_STRING' '" Manjaro Linux ARM"'
+
+  make -j$(nproc --all) EXTRAVERSION=-${pkgrel}
+}
+
+package() {
+  cd u-boot-${pkgver/rc/-rc}
+
+  mkdir -p "${pkgdir}/boot/extlinux"
+
+  install -D -m 0644 u-boot-rockchip.bin -t "${pkgdir}/boot"
+}

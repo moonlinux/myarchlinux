@@ -1,0 +1,84 @@
+# U-Boot: Rock Pi 4B based on PKGBUILD for Rock Pi 5B
+# Maintainer: Dan Johansen <strit@manjaro.org>
+# Contributor: Kevin Mihelich 
+# Contributor: Adam <adam900710@gmail.com>
+# Contributor: Dragan Simic <dsimic@buserror.io>
+# Contributor: Anand Moon <linux.amoon@gmail.com>
+
+pkgname=uboot-rockpi5b-mainline
+pkgver=2026.07
+pkgrel=1
+_tfaver=lts-v2.14.4
+pkgdesc="U-Boot for Radxa Rock Pi 5B"
+arch=('aarch64')
+url='http://www.denx.de/wiki/U-Boot/WebHome'
+license=('GPL')
+makedepends=('git' 'arm-none-eabi-gcc' 'dtc' 'bc' 'swig' 'python-setuptools' 'python-pyelftools')
+provides=('uboot')
+conflicts=('uboot')
+replaces=('uboot-rockpi5b-mainline')
+install=${pkgname}.install
+source=("ftp://ftp.denx.de/pub/u-boot/u-boot-${pkgver/rc/-rc}.tar.bz2"
+	"https://github.com/TrustedFirmware-A/trusted-firmware-a/archive/refs/tags/${_tfaver}.tar.gz"
+	"rk3588_ddr_lp4_lp5.bin::https://github.com/rockchip-linux/rkbin/raw/refs/heads/master/bin/rk35/rk3588_ddr_lp4_2112MHz_lp5_2400MHz_v1.21.bin")
+
+sha256sums=('78e8bfc382fe388f9b55aa1daf8c563522a037779b5d4c349d1415e381f1243e'
+	'b73683f713f3405e4978a427666b1e3cdf2391edaac9b308ca1f53b6809fb454'
+	'ae96f7ddbc6ffa891ab24708e71930cb2968cfa7a2a0972fdc0cacd6891e4f95')
+
+prepare() {
+  cd u-boot-${pkgver/rc/-rc}
+  # Apply patches here
+}
+
+build() {
+  # Avoid build warnings by editing a .config option in place instead of
+  # appending an option to .config, if an option is already present
+  update_config() {
+    if ! grep -q "^$1=$2$" .config; then
+      if grep -q "^# $1 is not set$" .config; then
+        sed -i -e "s/^# $1 is not set$/$1=$2/g" .config
+      elif grep -q "^$1=" .config; then
+        sed -i -e "s/^$1=.*/$1=$2/g" .config
+      else
+        echo "$1=$2" >> .config
+      fi
+    fi
+  }
+
+  unset CFLAGS CXXFLAGS CPPFLAGS LDFLAGS
+
+  cd ${srcdir}/trusted-firmware-a-${_tfaver}
+
+  echo -e "\nBuilding TF-A for Radxa Rock Pi 5B...\n"
+  make CC=gcc PLAT=rk3588 bl31
+  cp build/rk3588/release/bl31/bl31.elf ../u-boot-${pkgver/rc/-rc}
+
+  cd ../u-boot-${pkgver/rc/-rc}
+  export BL31=bl31.elf
+
+  export ROCKCHIP_TPL=${srcdir}/rk3588_ddr_lp4_lp5.bin
+
+  echo -e "\nBuilding U-Boot for Radxa Rock Pi 5B...\n"
+  make rock5b-rk3588_defconfig
+
+  update_config 'CONFIG_IDENT_STRING' '" Manjaro Linux ARM"'
+#  update_config 'CONFIG_OF_LIBFDT_OVERLAY' 'y'
+#  update_config 'CONFIG_SPL_MMC_SDHCI_SDMA' 'n'
+#  update_config 'CONFIG_MMC_SDHCI_SDMA' 'y'
+#  update_config 'CONFIG_MMC_SPEED_MODE_SET' 'y'
+#  update_config 'CONFIG_MMC_IO_VOLTAGE' 'y'
+#  update_config 'CONFIG_MMC_UHS_SUPPORT' 'y'
+#  update_config 'CONFIG_MMC_HS400_ES_SUPPORT' 'y'
+#  update_config 'CONFIG_MMC_HS400_SUPPORT' 'y'
+
+  make -j$(nproc --all) EXTRAVERSION=-${pkgrel}
+}
+
+package() {
+  cd u-boot-${pkgver/rc/-rc}
+
+  mkdir -p "${pkgdir}/boot/extlinux"
+
+  install -D -m 0644 u-boot-rockchip.bin u-boot-rockchip-spi.bin -t "${pkgdir}/boot"
+}
